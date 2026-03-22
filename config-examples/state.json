@@ -1,0 +1,39 @@
+{
+  "date": "2026-03-23",
+  "timezone": "Asia/Shanghai",
+  "status": "running",
+  "next_task_id": 4,
+  "last_check_at": "2026-03-23T15:00:00+08:00",
+  "last_periodic_slot": "2026-03-23T15:00:00+08:00",
+  "all_done_announced_at": null,
+  "tasks": [
+    {
+      "id": 1,
+      "text": "写日报",
+      "done": true,
+      "special_time": null,
+      "special_notified_at": null,
+      "created_at": "2026-03-23T09:05:00+08:00",
+      "updated_at": "2026-03-23T10:00:00+08:00"
+    },
+    {
+      "id": 2,
+      "text": "跟进客户",
+      "done": false,
+      "special_time": "15:30",
+      "special_notified_at": null,
+      "created_at": "2026-03-23T09:05:00+08:00",
+      "updated_at": "2026-03-23T09:05:00+08:00"
+    },
+    {
+      "id": 3,
+      "text": "整理方案",
+      "done": false,
+      "special_time": null,
+      "special_notified_at": null,
+      "created_at": "2026-03-23T10:15:00+08:00",
+      "updated_at": "2026-03-23T10:15:00+08:00"
+    }
+  ],
+  "updated_at": "2026-03-23T15:00:00+08:00"
+}

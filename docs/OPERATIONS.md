@@ -1,0 +1,180 @@
+# Operations
+
+本文档面向日常运行和排障。
+
+## 运行时文件
+
+- Skill 根目录：`~/.newmax/skills/daily-reminder_VPS`
+- 状态文件：`~/.openclaw/workspace/.daily-reminder_VPS/state.json`
+- OpenClaw 配置：`~/.openclaw/openclaw.json`
+- Cron 配置：`~/.openclaw/cron/jobs.json`
+
+## 日常运行流程
+
+### 启动当天提醒
+
+你在 OpenClaw 中发：
+
+```text
+每日提醒 开始
+今天先写日报，下午三点提醒我跟进客户，晚上把方案过一遍
+```
+
+然后 skill 会：
+
+1. 解析任务与专项时间
+2. 让你确认不确定的拆分或时间
+3. 写入状态文件
+4. 等待整点、半点或专项时间的 cron 检查触发提醒
+
+### 增加任务
+
+```text
+每日提醒 新增
+再加一条，六点提醒我交电费
+```
+
+新增任务会继续使用当天编号序列，不会重排旧编号。
+
+### 完成任务
+
+```text
+每日提醒 第3条完成
+```
+
+对应任务会被标记为完成，并在后续消息中保留删除线。
+
+### 改专项时间
+
+```text
+每日提醒 第2条改到 15:30
+```
+
+如果时间已经过去，脚本会返回 `past_time`，这时应由 OpenClaw 追问你新的今天稍后时间。
+
+## 状态文件说明
+
+当前状态文件示例见 `config-examples/state.json`。
+
+核心字段：
+
+- `date`：当天日期
+- `timezone`：固定为 `Asia/Shanghai`
+- `status`：`running`、`paused_all_done` 或 `stopped`
+- `next_task_id`：下一个要分配的编号
+- `last_check_at`：上一次 cron 检查时间
+- `last_periodic_slot`：最近一次周期提醒对应的整点或半点
+- `all_done_announced_at`：全部完成时的记录时间
+- `tasks`：任务列表
+
+单条任务字段：
+
+- `id`
+- `text`
+- `done`
+- `special_time`
+- `special_notified_at`
+- `created_at`
+- `updated_at`
+
+## 手工运维命令
+
+### 查看当前状态
+
+```bash
+python3 scripts/daily_reminder_state.py status
+```
+
+### 补建状态文件
+
+```bash
+python3 scripts/daily_reminder_state.py ensure-state
+```
+
+### 模拟新增任务
+
+```bash
+python3 scripts/daily_reminder_state.py add-tasks \
+  --command add \
+  --tasks-json '[{"text":"写日报","special_time":null}]'
+```
+
+### 模拟完成任务
+
+```bash
+python3 scripts/daily_reminder_state.py complete-task --task-id 1
+```
+
+### 模拟改时间
+
+```bash
+python3 scripts/daily_reminder_state.py reschedule-task --task-id 2 --special-time 15:30
+```
+
+### 模拟提醒决策
+
+```bash
+python3 scripts/daily_reminder_state.py build-reminder
+```
+
+### 手工清空当天状态
+
+```bash
+python3 scripts/daily_reminder_state.py clear-day
+```
+
+## 典型排障
+
+### 问题：到了整点或半点没有提醒
+
+检查顺序：
+
+1. 确认 `~/.openclaw/cron/jobs.json` 中两个 `_VPS` 任务存在且启用
+2. 确认状态文件中的 `status` 是 `running`
+3. 确认任务列表不是空数组
+4. 手工运行 `python3 scripts/daily_reminder_state.py build-reminder` 查看返回的 `kind`
+5. 如果脚本返回了消息但飞书没收到，说明问题在 OpenClaw 的消息发送链路，而不在本 skill
+
+### 问题：所有任务完成后不再提醒
+
+这是设计行为。全部完成后状态会变成 `paused_all_done`。如果当天后来又新增任务，提醒会自动恢复。
+
+### 问题：专项提醒错过了
+
+如果 OpenClaw 中途重启，恢复后下一次检查会补发一次汇总提醒，而不是把所有错过的时间点逐条补刷。
+
+### 问题：第二天还残留昨天任务
+
+手工执行：
+
+```bash
+python3 scripts/daily_reminder_state.py clear-day --now 2026-03-24T00:00:00+08:00
+```
+
+然后确认 `daily-reminder-midnight-clear_VPS` cron 任务存在。
+
+### 问题：手工停止后又想重新开始
+
+直接重新发送：
+
+```text
+每日提醒 开始
+...
+```
+
+skill 会把新内容作为当天新的运行状态写入。
+
+## 恢复与回滚
+
+### 恢复 cron 备份
+
+`scripts/install_cron.py` 在改写 `jobs.json` 时会自动生成 `.bak` 备份文件。需要回滚时，直接把备份内容拷回即可。
+
+### 清空并重建状态
+
+如果状态文件被手工改坏，最稳的办法是：
+
+1. 备份当前 `state.json`
+2. 删除或移走它
+3. 执行 `python3 scripts/daily_reminder_state.py ensure-state`
+4. 在 OpenClaw 中重新发一遍当天 `开始` 命令
