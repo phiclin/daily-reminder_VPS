@@ -13,11 +13,14 @@
     "expr": "* * * * *",
     "tz": "Asia/Shanghai"
   },
-  "sessionTarget": "main",
-  "wakeMode": "now",
+  "sessionTarget": "isolated",
+  "wakeMode": "next-heartbeat",
   "payload": {
-    "kind": "systemEvent",
-    "text": "__DAILY_REMINDER_CHECK__"
+    "kind": "agentTurn",
+    "message": "Run the daily reminder checker script.\nExecute: python3 /path/to/daily_reminder_state.py build-reminder\nParse the JSON result from stdout.\nIf \"kind\" is \"none\", output exactly HEARTBEAT_OK.\nOtherwise output exactly the value of \"message\" with no extra text."
+  },
+  "delivery": {
+    "mode": "announce"
   },
   "enabled": true
 }
@@ -34,11 +37,14 @@
     "expr": "0 0 * * *",
     "tz": "Asia/Shanghai"
   },
-  "sessionTarget": "main",
-  "wakeMode": "now",
+  "sessionTarget": "isolated",
+  "wakeMode": "next-heartbeat",
   "payload": {
-    "kind": "systemEvent",
-    "text": "__DAILY_REMINDER_CLEAR__"
+    "kind": "agentTurn",
+    "message": "Run the daily reminder day-clear script.\nExecute: python3 /path/to/daily_reminder_state.py clear-day\nIgnore the JSON result and output exactly HEARTBEAT_OK."
+  },
+  "delivery": {
+    "mode": "none"
   },
   "enabled": true
 }

@@ -21,7 +21,7 @@
 - 约束触发协议
 - 约束命令语义
 - 要求模型把模糊解析结果先确认后落库
-- 定义收到 cron `systemEvent` 后该调用哪个脚本命令
+- 约束安装前的 cron 健康检查方式
 
 它不负责自行记忆当天状态，也不负责自行判断复杂的跨时间逻辑。
 
@@ -57,13 +57,12 @@
 - `daily-reminder-checker_VPS`
 - `daily-reminder-midnight-clear_VPS`
 
-当前采用的不是旧版 `isolated agentTurn`，而是：
+当前默认结构是：
 
-- `sessionTarget: "main"`
-- `wakeMode: "now"`
-- `payload.kind: "systemEvent"`
+- checker：`sessionTarget: "isolated"` + `payload.kind: "agentTurn"` + `delivery.mode: "announce"`
+- midnight clear：`sessionTarget: "isolated"` + `payload.kind: "agentTurn"` + `delivery.mode: "none"`
 
-这样更符合当前 OpenClaw 的主会话唤醒模型。
+这样 checker job 会自己完成提醒判断和投递，不再依赖 `systemEvent -> 主会话 -> 再投递` 这条在部分环境中不稳定的链路。
 
 ## 数据流
 
@@ -78,18 +77,19 @@
 
 ### 定时提醒流
 
-1. Cron 每分钟触发 `__DAILY_REMINDER_CHECK__`
-2. `SKILL.md` 指导 OpenClaw 调用 `build-reminder`
+1. Cron 每分钟触发 checker isolated agent turn
+2. agent turn 直接运行 `build-reminder`
 3. 脚本根据 `last_check_at`、任务状态、专项时间和当前时间决定是否需要提醒
-4. 如果需要，脚本返回完整消息文本和提醒类型
-5. OpenClaw 将该消息转发到飞书
+4. `kind == "none"` 时只输出 `HEARTBEAT_OK`
+5. `kind != "none"` 时只输出完整消息文本
+6. Cron `delivery.mode = "announce"` 把该消息直接投递到飞书
 
 ### 零点清空流
 
-1. Cron 在 `00:00` 触发 `__DAILY_REMINDER_CLEAR__`
-2. OpenClaw 调用 `clear-day`
+1. Cron 在 `00:00` 触发 midnight clear isolated agent turn
+2. agent turn 直接运行 `clear-day`
 3. 脚本清空当天状态
-4. 不发送额外结束消息
+4. Cron `delivery.mode = "none"`，不投递任何结束消息
 
 ### 安装与注册流
 
@@ -165,3 +165,4 @@
 - 任务文本的自然语言拆分与时间识别由 OpenClaw 侧完成，不在 Python 脚本里做 NLP
 - 当前版本只支持“完成”和“改时间”，不支持直接“改任务内容”
 - 如果本机没有可用的 `openclaw` CLI，安装器只能做文件级降级写入；在 Gateway 已经运行的情况下，仍然需要人工重启才能让 scheduler 重新加载
+- 如果 checker job 没有显式配置 `channel/to/account`，则投递目标仍依赖 OpenClaw 的 last-route；在跨机器或多账号场景中，建议安装时显式传入

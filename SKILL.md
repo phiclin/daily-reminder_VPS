@@ -1,6 +1,6 @@
 ---
 name: daily-reminder_VPS
-description: 每日提醒技能_VPS。用于 OpenClaw 中的“每日提醒”命令式工作流：接收“每日提醒 + 动词”的口语化任务输入，维护当天任务状态，在整点或半点以及单个专项时间点通过飞书提醒，并在 00:00 自动清空。适用于开始提醒、追加任务、标记完成、改时间、查看状态、处理定时 system event。
+description: 每日提醒技能_VPS。用于 OpenClaw 中的“每日提醒”命令式工作流：接收“每日提醒 + 动词”的口语化任务输入，维护当天任务状态，在整点或半点以及单个专项时间点通过飞书提醒，并在 00:00 自动清空。适用于开始提醒、追加任务、标记完成、改时间和查看状态。
 ---
 
 # Daily Reminder
@@ -43,6 +43,12 @@ python3 {baseDir}/scripts/install_cron.py
 ```
 
 脚本会优先通过 `openclaw cron add/rm` 把任务注册进正在运行的 Gateway scheduler；如果本机没有可用的 `openclaw` CLI，则只会回写 `~/.openclaw/cron/jobs.json`，这种情况下运行中的 Gateway 不会热加载任务。
+
+如果你需要固定投递到某个飞书目标，而不是依赖 last-route，可以改用：
+
+```bash
+python3 {baseDir}/scripts/install_cron.py --channel feishu --to user:YOUR_TARGET --account main
+```
 
 ## Cron Health Check
 
@@ -145,50 +151,35 @@ python3 {baseDir}/scripts/daily_reminder_state.py stop-day
 
 手动停止后，今天的任务立刻清空。
 
-## Cron Events
+## Cron Delivery Model
 
-该 skill 必须识别两个 system event：
+本 skill 依赖安装器生成的两个 cron job，但它们不再走主会话 `systemEvent`：
 
-- `__DAILY_REMINDER_CHECK__`
-- `__DAILY_REMINDER_CLEAR__`
+- checker job：`isolated + agentTurn + announce`
+- midnight clear job：`isolated + agentTurn + no-deliver`
 
-### `__DAILY_REMINDER_CHECK__`
-
-运行：
+checker job 会直接运行：
 
 ```bash
 python3 {baseDir}/scripts/daily_reminder_state.py build-reminder
 ```
 
-读取返回 JSON：
+处理规则：
 
-- `kind == "none"`：不发消息。
-- `kind == "periodic"`：发送 `message`，标题已是“常规提醒”。
-- `kind == "special"`：发送 `message`，标题已是“专项提醒”。
-- `kind == "merged"`：发送 `message`，标题已是“合并提醒”。
-- `kind == "catchup"`：发送 `message`，标题已是“补发提醒”。
+- `kind == "none"`：只输出 `HEARTBEAT_OK`，不会投递提醒。
+- `kind != "none"`：只输出返回 JSON 中的 `message`，由 cron delivery 直接发到飞书。
 
-消息内容已经是完整清单：
-
-- 已完成项保留并用 `~~删除线~~` 形式表达。
-- 专项时间会显示为 `@15:30`。
-- 如果有到点任务，会追加“到点任务：第 N 条”。
-
-### `__DAILY_REMINDER_CLEAR__`
-
-运行：
+midnight clear job 会直接运行：
 
 ```bash
 python3 {baseDir}/scripts/daily_reminder_state.py clear-day
 ```
 
-零点清空是静默动作，不额外发送结束消息。
+处理规则：
 
-## Message Delivery
-
-提醒目标是飞书。对于需要真的发出的提醒，调用 message 工具把脚本返回的 `message` 发送到飞书渠道。
-
-如果当前 OpenClaw 链路支持富文本或卡片，可以把每行任务作为 `lark_md` 渲染；如果不支持，直接发送脚本返回的纯文本也可以，因为内容已经可读。
+- 只负责清空当天状态。
+- `delivery.mode = "none"`，不会额外投递任何结束消息。
+- 不要在 prompt 或输出中使用“静默”这类占位词，避免被错误发送给用户。
 
 ## Formatting Rules
 
@@ -211,4 +202,5 @@ python3 {baseDir}/scripts/daily_reminder_state.py clear-day
 - 不要在未经确认时写入模糊任务拆分结果。
 - 不要把重复提醒做成多条刷屏；checker 每次最多发一条汇总提醒。
 - 如果同一天全部完成后用户又新增任务，先正常追加，再恢复提醒。
+- 不要继续依赖主会话 `systemEvent -> 二次处理 -> 飞书投递` 这条链路；cron 应直接完成判断和投递。
 - 不要在 Gateway 运行中只改 `~/.openclaw/cron/jobs.json` 就假设 scheduler 已经生效；要么看到 `scheduler.mode == "cli_synced"`，要么明确要求用户重启 Gateway。

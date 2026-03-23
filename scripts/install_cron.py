@@ -21,6 +21,7 @@ CHECKER_ID = "daily-reminder-checker_VPS"
 CLEAR_ID = "daily-reminder-midnight-clear_VPS"
 LEGACY_IDS = {"daily-reminder-checker", "daily-reminder-midnight-clear"}
 CLI_ENV_VAR = "OPENCLAW_CLI"
+STATE_SCRIPT = (Path(__file__).resolve().parent / "daily_reminder_state.py").resolve()
 
 Runner = Callable[[list[str]], tuple[int, str, str]]
 
@@ -30,7 +31,51 @@ def backup_path(path: Path) -> Path:
     return path.with_name(f"{path.name}.{timestamp}.bak")
 
 
-def checker_job() -> dict[str, Any]:
+def checker_prompt() -> str:
+    script = shlex.quote(str(STATE_SCRIPT))
+    return "\n".join(
+        [
+            "Run the daily reminder checker script.",
+            f"Execute: python3 {script} build-reminder",
+            'Parse the JSON result from stdout.',
+            'If "kind" is "none", output exactly HEARTBEAT_OK.',
+            'Otherwise output exactly the value of "message" with no extra text.',
+        ]
+    )
+
+
+def clear_prompt() -> str:
+    script = shlex.quote(str(STATE_SCRIPT))
+    return "\n".join(
+        [
+            "Run the daily reminder day-clear script.",
+            f"Execute: python3 {script} clear-day",
+            'Ignore the JSON result and output exactly HEARTBEAT_OK.',
+        ]
+    )
+
+
+def checker_delivery(
+    delivery_channel: str | None = None,
+    delivery_to: str | None = None,
+    delivery_account: str | None = None,
+) -> dict[str, Any]:
+    delivery: dict[str, Any] = {"mode": "announce"}
+    if delivery_channel:
+        delivery["channel"] = delivery_channel
+    if delivery_to:
+        delivery["to"] = delivery_to
+    if delivery_account:
+        delivery["accountId"] = delivery_account
+    return delivery
+
+
+def checker_job(
+    *,
+    delivery_channel: str | None = None,
+    delivery_to: str | None = None,
+    delivery_account: str | None = None,
+) -> dict[str, Any]:
     return {
         "id": CHECKER_ID,
         "description": "每分钟检查每日提醒是否需要发飞书提醒",
@@ -39,12 +84,13 @@ def checker_job() -> dict[str, Any]:
             "expr": "* * * * *",
             "tz": DEFAULT_TZ,
         },
-        "sessionTarget": "main",
-        "wakeMode": "now",
+        "sessionTarget": "isolated",
+        "wakeMode": "next-heartbeat",
         "payload": {
-            "kind": "systemEvent",
-            "text": "__DAILY_REMINDER_CHECK__",
+            "kind": "agentTurn",
+            "message": checker_prompt(),
         },
+        "delivery": checker_delivery(delivery_channel, delivery_to, delivery_account),
         "enabled": True,
     }
 
@@ -58,32 +104,60 @@ def clear_job() -> dict[str, Any]:
             "expr": "0 0 * * *",
             "tz": DEFAULT_TZ,
         },
-        "sessionTarget": "main",
-        "wakeMode": "now",
+        "sessionTarget": "isolated",
+        "wakeMode": "next-heartbeat",
         "payload": {
-            "kind": "systemEvent",
-            "text": "__DAILY_REMINDER_CLEAR__",
+            "kind": "agentTurn",
+            "message": clear_prompt(),
         },
+        "delivery": {"mode": "none"},
         "enabled": True,
     }
 
 
-def expected_jobs() -> list[dict[str, Any]]:
-    return [checker_job(), clear_job()]
+def expected_jobs(
+    *,
+    delivery_channel: str | None = None,
+    delivery_to: str | None = None,
+    delivery_account: str | None = None,
+) -> list[dict[str, Any]]:
+    return [
+        checker_job(
+            delivery_channel=delivery_channel,
+            delivery_to=delivery_to,
+            delivery_account=delivery_account,
+        ),
+        clear_job(),
+    ]
 
 
-def expected_scheduler_specs() -> list[dict[str, str]]:
+def scheduler_spec(job: dict[str, Any]) -> dict[str, Any]:
+    payload = job["payload"]
+    return {
+        "name": job["id"],
+        "expr": job["schedule"]["expr"],
+        "tz": job["schedule"]["tz"],
+        "session_target": job["sessionTarget"],
+        "wake_mode": job["wakeMode"],
+        "payload_kind": payload["kind"],
+        "payload_message": payload.get("message"),
+        "delivery": deepcopy(job.get("delivery") or {}),
+    }
+
+
+def expected_scheduler_specs(
+    *,
+    delivery_channel: str | None = None,
+    delivery_to: str | None = None,
+    delivery_account: str | None = None,
+) -> list[dict[str, Any]]:
     specs: list[dict[str, str]] = []
-    for job in expected_jobs():
-        specs.append(
-            {
-                "name": job["id"],
-                "expr": job["schedule"]["expr"],
-                "tz": job["schedule"]["tz"],
-                "system_event": job["payload"]["text"],
-                "wake_mode": job["wakeMode"],
-            }
-        )
+    for job in expected_jobs(
+        delivery_channel=delivery_channel,
+        delivery_to=delivery_to,
+        delivery_account=delivery_account,
+    ):
+        specs.append(scheduler_spec(job))
     return specs
 
 
@@ -116,11 +190,21 @@ def remove_legacy(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [job for job in jobs if job.get("id") not in LEGACY_IDS]
 
 
-def install_file(path: Path) -> dict[str, Any]:
+def install_file(
+    path: Path,
+    *,
+    delivery_channel: str | None = None,
+    delivery_to: str | None = None,
+    delivery_account: str | None = None,
+) -> dict[str, Any]:
     current = load_jobs(path)
     original = json.dumps(current, ensure_ascii=False, sort_keys=True)
     jobs = remove_legacy(current.get("jobs", []))
-    for expected in expected_jobs():
+    for expected in expected_jobs(
+        delivery_channel=delivery_channel,
+        delivery_to=delivery_to,
+        delivery_account=delivery_account,
+    ):
         jobs = upsert(jobs, expected)
     updated = {"version": current.get("version", 1), "jobs": jobs}
     changed = json.dumps(updated, ensure_ascii=False, sort_keys=True) != original
@@ -213,27 +297,28 @@ def scheduler_job_matches_name(job: dict[str, Any], name: str) -> bool:
     return False
 
 
-def scheduler_job_matches_spec(job: dict[str, Any], spec: dict[str, str]) -> bool:
+def scheduler_job_matches_spec(job: dict[str, Any], spec: dict[str, Any]) -> bool:
     schedule = job.get("schedule") or {}
     payload = job.get("payload") or {}
+    delivery = job.get("delivery") or {}
     wake_mode = job.get("wakeMode") or "now"
     enabled = job.get("enabled")
+    expected_delivery = spec.get("delivery") or {}
     return (
         schedule.get("kind") == "cron"
         and schedule.get("expr") == spec["expr"]
         and schedule.get("tz") == spec["tz"]
-        and job.get("sessionTarget") == "main"
-        and payload.get("kind") == "systemEvent"
-        and payload.get("text") == spec["system_event"]
+        and job.get("sessionTarget") == spec["session_target"]
+        and payload.get("kind") == spec["payload_kind"]
+        and payload.get("message") == spec["payload_message"]
         and wake_mode == spec["wake_mode"]
+        and all(delivery.get(key) == value for key, value in expected_delivery.items())
         and enabled is not False
     )
 
 
-def add_scheduler_job(cli_command: Sequence[str], runner: Runner, spec: dict[str, str]) -> None:
-    run_cli(
-        cli_command,
-        runner,
+def add_scheduler_job(cli_command: Sequence[str], runner: Runner, spec: dict[str, Any]) -> None:
+    args = [
         "add",
         "--name",
         spec["name"],
@@ -242,12 +327,24 @@ def add_scheduler_job(cli_command: Sequence[str], runner: Runner, spec: dict[str
         "--tz",
         spec["tz"],
         "--session",
-        "main",
-        "--system-event",
-        spec["system_event"],
+        spec["session_target"],
+        "--message",
+        spec["payload_message"],
         "--wake",
         spec["wake_mode"],
-    )
+    ]
+    delivery = spec.get("delivery") or {}
+    if delivery.get("mode") == "announce":
+        args.append("--announce")
+        if delivery.get("channel"):
+            args.extend(["--channel", delivery["channel"]])
+        if delivery.get("to"):
+            args.extend(["--to", delivery["to"]])
+        if delivery.get("accountId"):
+            args.extend(["--account", delivery["accountId"]])
+    elif delivery.get("mode") == "none":
+        args.append("--no-deliver")
+    run_cli(cli_command, runner, *args)
 
 
 def remove_scheduler_job(cli_command: Sequence[str], runner: Runner, job: dict[str, Any]) -> None:
@@ -257,12 +354,23 @@ def remove_scheduler_job(cli_command: Sequence[str], runner: Runner, job: dict[s
     run_cli(cli_command, runner, "rm", key)
 
 
-def sync_scheduler(cli_command: Sequence[str], runner: Runner) -> dict[str, Any]:
+def sync_scheduler(
+    cli_command: Sequence[str],
+    runner: Runner,
+    *,
+    delivery_channel: str | None = None,
+    delivery_to: str | None = None,
+    delivery_account: str | None = None,
+) -> dict[str, Any]:
     status_before = parse_json_output(run_cli(cli_command, runner, "status", "--json"))
     jobs_before = scheduler_jobs_from_payload(parse_json_output(run_cli(cli_command, runner, "list", "--all", "--json")))
     actions: list[dict[str, str]] = []
 
-    for spec in expected_scheduler_specs():
+    for spec in expected_scheduler_specs(
+        delivery_channel=delivery_channel,
+        delivery_to=delivery_to,
+        delivery_account=delivery_account,
+    ):
         matches = [job for job in jobs_before if scheduler_job_matches_name(job, spec["name"])]
         exact = [job for job in matches if scheduler_job_matches_spec(job, spec)]
         if len(matches) == 1 and len(exact) == 1:
@@ -275,7 +383,15 @@ def sync_scheduler(cli_command: Sequence[str], runner: Runner) -> dict[str, Any]
 
     status_after = parse_json_output(run_cli(cli_command, runner, "status", "--json"))
     jobs_after = scheduler_jobs_from_payload(parse_json_output(run_cli(cli_command, runner, "list", "--all", "--json")))
-    missing = [spec["name"] for spec in expected_scheduler_specs() if not any(scheduler_job_matches_name(job, spec["name"]) for job in jobs_after)]
+    missing = [
+        spec["name"]
+        for spec in expected_scheduler_specs(
+            delivery_channel=delivery_channel,
+            delivery_to=delivery_to,
+            delivery_account=delivery_account,
+        )
+        if not any(scheduler_job_matches_name(job, spec["name"]) for job in jobs_after)
+    ]
     if missing:
         raise RuntimeError(f"scheduler still missing expected jobs after sync: {', '.join(missing)}")
 
@@ -298,6 +414,9 @@ def install(
     allow_cli_sync: bool = True,
     cli_command: Sequence[str] | str | None = None,
     runner: Runner | None = None,
+    delivery_channel: str | None = None,
+    delivery_to: str | None = None,
+    delivery_account: str | None = None,
 ) -> dict[str, Any]:
     runner = runner or default_runner
     warnings: list[str] = []
@@ -306,17 +425,32 @@ def install(
         resolved_cli = discover_cli_command(cli_command)
         if resolved_cli:
             try:
-                scheduler = sync_scheduler(resolved_cli, runner)
+                scheduler = sync_scheduler(
+                    resolved_cli,
+                    runner,
+                    delivery_channel=delivery_channel,
+                    delivery_to=delivery_to,
+                    delivery_account=delivery_account,
+                )
                 return {
                     "ok": True,
                     "changed": scheduler["changed"],
                     "backup": None,
-                    "jobs": expected_jobs(),
+                    "jobs": expected_jobs(
+                        delivery_channel=delivery_channel,
+                        delivery_to=delivery_to,
+                        delivery_account=delivery_account,
+                    ),
                     "scheduler": scheduler,
                     "warnings": warnings,
                 }
             except Exception as exc:
-                file_result = install_file(path)
+                file_result = install_file(
+                    path,
+                    delivery_channel=delivery_channel,
+                    delivery_to=delivery_to,
+                    delivery_account=delivery_account,
+                )
                 warnings.append(
                     "OpenClaw cron scheduler live sync failed. The jobs file was updated as a fallback, "
                     "but a running Gateway may still need restart or a working openclaw CLI to load these jobs."
@@ -334,7 +468,12 @@ def install(
                     "warnings": warnings,
                 }
 
-    file_result = install_file(path)
+    file_result = install_file(
+        path,
+        delivery_channel=delivery_channel,
+        delivery_to=delivery_to,
+        delivery_account=delivery_account,
+    )
     warnings.append(
         "OpenClaw CLI was not available, so only ~/.openclaw/cron/jobs.json was updated. "
         "If the Gateway is already running, restart it or rerun this installer with a working openclaw CLI."
@@ -357,12 +496,18 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--jobs-path", default=str(DEFAULT_JOBS_PATH))
     parser.add_argument("--openclaw-cli")
+    parser.add_argument("--channel")
+    parser.add_argument("--to")
+    parser.add_argument("--account")
     parser.add_argument("--no-cli-sync", action="store_true")
     args = parser.parse_args()
     result = install(
         Path(args.jobs_path),
         allow_cli_sync=not args.no_cli_sync,
         cli_command=args.openclaw_cli,
+        delivery_channel=args.channel,
+        delivery_to=args.to,
+        delivery_account=args.account,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if not result["ok"]:

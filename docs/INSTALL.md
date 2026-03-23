@@ -27,6 +27,7 @@ bash install.sh
 - 将当前仓库软链接到 `~/.newmax/skills/daily-reminder_VPS`
 - 在 `~/.openclaw/openclaw.json` 中启用 `daily-reminder_VPS`
 - 调用 `scripts/install_cron.py` 优先向 live scheduler 注册 `_VPS` cron 任务
+- 默认安装为 `isolated + agentTurn` 的 direct-delivery checker 和 `no-deliver` 的午夜清理任务
 - 在没有可用 CLI 时，回写 `jobs.json` 作为降级方案
 - 初始化 `~/.openclaw/workspace/.daily-reminder_VPS/state.json`
 
@@ -36,6 +37,15 @@ bash install.sh
 
 ```bash
 OPENCLAW_CLI="/custom/path/to/openclaw" bash install.sh
+```
+
+如果你希望 checker cron 显式固定发到某个飞书目标，而不是依赖 OpenClaw last-route，可以这样执行：
+
+```bash
+DAILY_REMINDER_CHANNEL="feishu" \
+DAILY_REMINDER_TO="user:YOUR_TARGET" \
+DAILY_REMINDER_ACCOUNT="main" \
+bash install.sh
 ```
 
 ## 方式二：手动安装
@@ -73,6 +83,12 @@ ln -sfn "$(pwd)" ~/.newmax/skills/daily-reminder_VPS
 
 ```bash
 python3 scripts/install_cron.py
+```
+
+如果你要显式固定投递目标，可以改成：
+
+```bash
+python3 scripts/install_cron.py --channel feishu --to user:YOUR_TARGET --account main
 ```
 
 这会把两个任务写入 `~/.openclaw/cron/jobs.json`：
@@ -163,7 +179,7 @@ cat ~/.openclaw/workspace/.daily-reminder_VPS/state.json
 python3 scripts/install_cron.py
 ```
 
-该脚本会把本 skill 使用的 cron 配置修正为当前支持的 `systemEvent` 结构。
+该脚本会把本 skill 使用的 cron 配置修正为当前支持的 `isolated agentTurn` 结构。
 
 ### `jobs.json` 内容正确，但定时器还是不跑
 
@@ -179,4 +195,13 @@ python3 scripts/install_cron.py
 
 ### 收不到飞书消息
 
-本仓库只负责 skill、状态和调度逻辑。真正的飞书发送仍依赖你的 OpenClaw 消息链路配置，请先确认 OpenClaw 其他飞书消息本身能够正常发送。
+先看 `openclaw cron list --all --json` 或运行记录里的 delivery 字段：
+
+- 如果 `lastDeliveryStatus = not-requested`，通常说明当前机器上仍在跑旧的主会话链路，或 checker job 没有走 announce。重新执行 `python3 scripts/install_cron.py`。
+- 如果你的环境存在多账号或 last-route 不稳定，建议重新执行：
+
+```bash
+python3 scripts/install_cron.py --channel feishu --to user:YOUR_TARGET --account main
+```
+
+如果 delivery 已经是 `delivered` 但你仍然没看到消息，再检查 OpenClaw 本身的飞书消息能力。

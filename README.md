@@ -11,7 +11,7 @@
 - 单条任务可附带一个专项提醒时间
 - 专项提醒与整点/半点撞上时自动合并
 - 全部完成后自动暂停，后续新增任务时自动恢复
-- `00:00` 自动清空，不保留前一天状态
+- `00:00` 自动清空，不投递额外结束消息
 - OpenClaw 重启后自动恢复，并补发一次错过的汇总提醒
 
 ## 仓库内容
@@ -62,7 +62,7 @@
 
 ### 当天结束
 
-- `00:00` 静默清空状态
+- `00:00` 清空状态
 - 不保留前一天日志
 - 第二天重新发 `每日提醒 开始 ...` 即重新开始
 
@@ -86,6 +86,7 @@ bash install.sh
 - 把仓库链接到 `~/.newmax/skills/daily-reminder_VPS`
 - 在 `~/.openclaw/openclaw.json` 中启用该 skill
 - 优先通过 `openclaw` CLI live sync 正在运行的 Gateway scheduler
+- 默认安装为 `isolated + agentTurn` 的 direct-delivery cron job
 - 在无法 live sync 时，回写 `~/.openclaw/cron/jobs.json` 作为降级方案
 - 初始化 `~/.openclaw/workspace/.daily-reminder_VPS/state.json`
 
@@ -93,6 +94,14 @@ bash install.sh
 
 ```bash
 export OPENCLAW_CLI="/custom/path/to/openclaw"
+```
+
+如果你希望 checker cron 固定投递到指定飞书目标，而不是依赖 last-route，可以在安装前设置：
+
+```bash
+export DAILY_REMINDER_CHANNEL="feishu"
+export DAILY_REMINDER_TO="user:YOUR_TARGET"
+export DAILY_REMINDER_ACCOUNT="main"
 ```
 
 如果安装输出里出现 `scheduler.mode = "file_only"`，说明 cron 定义已经写入文件，但运行中的 Gateway 还没有热加载，需要重启 Gateway 或补上可用的 `openclaw` CLI 后重新执行安装。
@@ -151,7 +160,7 @@ export OPENCLAW_CLI="/custom/path/to/openclaw"
 5. 过一遍明天安排
 ```
 
-如果 OpenClaw 当前消息链路支持富文本或卡片，可把同样内容渲染为飞书富文本；如果不支持，直接发送纯文本也可以。
+checker cron 会直接把提醒文本 announce 到飞书；如果 OpenClaw 当前消息链路支持富文本或卡片，可把同样内容渲染为飞书富文本；如果不支持，直接发送纯文本也可以。
 
 ## 存储位置
 

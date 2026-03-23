@@ -90,6 +90,18 @@ openclaw cron list --all --json
 
 如果 `jobs.json` 已经有内容，但 `cron status` 仍显示 `jobs: 0` 或 `list` 为空，说明当前 Gateway 还没把文件内容注册进内存调度器。
 
+对 `daily-reminder-checker_VPS` 来说，健康状态应至少满足：
+
+- `sessionTarget = "isolated"`
+- `payload.kind = "agentTurn"`
+- `delivery.mode = "announce"`
+
+对 `daily-reminder-midnight-clear_VPS` 来说，健康状态应至少满足：
+
+- `sessionTarget = "isolated"`
+- `payload.kind = "agentTurn"`
+- `delivery.mode = "none"`
+
 ### 查看当前状态
 
 ```bash
@@ -156,9 +168,17 @@ python3 scripts/daily_reminder_state.py clear-day
 3. 确认状态文件中的 `status` 是 `running`
 4. 确认任务列表不是空数组
 5. 手工运行 `python3 scripts/daily_reminder_state.py build-reminder` 查看返回的 `kind`
-6. 如果脚本返回了消息但飞书没收到，说明问题在 OpenClaw 的消息发送链路，而不在本 skill
+6. 查看 cron run 或 `list --all --json` 里的 `delivery` / `lastDeliveryStatus`
+7. 如果脚本返回了消息，但 `lastDeliveryStatus = not-requested`，说明当前 checker job 仍在走旧链路，重新运行安装器修正 job
+8. 如果 `deliveryStatus = delivered` 但飞书没收到，再检查 OpenClaw 的飞书消息链路本身
 
 如果第 1 步通过、第 2 步失败，就是典型的“文件在但 scheduler 没加载”问题。此时重新运行 `python3 scripts/install_cron.py`，或者直接重启 Gateway。
+
+如果第 2 步通过，但 checker job 仍是 `main + systemEvent`，说明这台机器上的 cron 还是旧结构。重新运行：
+
+```bash
+python3 scripts/install_cron.py --channel feishu --to user:YOUR_TARGET --account main
+```
 
 ### 问题：所有任务完成后不再提醒
 
@@ -177,6 +197,19 @@ python3 scripts/daily_reminder_state.py clear-day --now 2026-03-24T00:00:00+08:0
 ```
 
 然后确认 `daily-reminder-midnight-clear_VPS` cron 任务存在。
+
+### 问题：午夜收到了“静默”之类无意义消息
+
+这是旧版午夜清理 prompt 的副作用，不是正确行为。当前版本的 midnight clear job 应满足：
+
+- `delivery.mode = "none"`
+- prompt 中不包含“静默”这种占位词
+
+重新运行安装器后，这类消息应当消失：
+
+```bash
+python3 scripts/install_cron.py
+```
 
 ### 问题：手工停止后又想重新开始
 

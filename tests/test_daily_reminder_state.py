@@ -157,8 +157,16 @@ class InstallCronTests(unittest.TestCase):
             ids = [job["id"] for job in saved["jobs"]]
             self.assertEqual(ids, ["other-job", cron.CHECKER_ID, cron.CLEAR_ID])
             checker = next(job for job in saved["jobs"] if job["id"] == cron.CHECKER_ID)
-            self.assertEqual(checker["sessionTarget"], "main")
-            self.assertEqual(checker["payload"]["kind"], "systemEvent")
+            self.assertEqual(checker["sessionTarget"], "isolated")
+            self.assertEqual(checker["payload"]["kind"], "agentTurn")
+            self.assertIn("build-reminder", checker["payload"]["message"])
+            self.assertEqual(checker["delivery"]["mode"], "announce")
+            clear = next(job for job in saved["jobs"] if job["id"] == cron.CLEAR_ID)
+            self.assertEqual(clear["sessionTarget"], "isolated")
+            self.assertEqual(clear["payload"]["kind"], "agentTurn")
+            self.assertIn("clear-day", clear["payload"]["message"])
+            self.assertNotIn("静默", clear["payload"]["message"])
+            self.assertEqual(clear["delivery"]["mode"], "none")
 
     def test_install_cron_syncs_live_scheduler_when_cli_is_available(self):
         calls: list[list[str]] = []
@@ -169,18 +177,20 @@ class InstallCronTests(unittest.TestCase):
                     "jobId": "job-checker",
                     "name": cron.CHECKER_ID,
                     "schedule": {"kind": "cron", "expr": "* * * * *", "tz": "Asia/Shanghai"},
-                    "sessionTarget": "main",
-                    "wakeMode": "now",
-                    "payload": {"kind": "systemEvent", "text": "__DAILY_REMINDER_CHECK__"},
+                    "sessionTarget": "isolated",
+                    "wakeMode": "next-heartbeat",
+                    "payload": {"kind": "agentTurn", "message": cron.checker_prompt()},
+                    "delivery": {"mode": "announce", "channel": "feishu", "to": "user:123", "accountId": "main"},
                     "enabled": True,
                 },
                 {
                     "jobId": "job-clear",
                     "name": cron.CLEAR_ID,
                     "schedule": {"kind": "cron", "expr": "0 0 * * *", "tz": "Asia/Shanghai"},
-                    "sessionTarget": "main",
-                    "wakeMode": "now",
-                    "payload": {"kind": "systemEvent", "text": "__DAILY_REMINDER_CLEAR__"},
+                    "sessionTarget": "isolated",
+                    "wakeMode": "next-heartbeat",
+                    "payload": {"kind": "agentTurn", "message": cron.clear_prompt()},
+                    "delivery": {"mode": "none"},
                     "enabled": True,
                 },
             ],
@@ -198,15 +208,32 @@ class InstallCronTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             jobs_path = Path(tmpdir) / "jobs.json"
-            result = cron.install(jobs_path, cli_command=["fake-openclaw"], runner=runner)
+            result = cron.install(
+                jobs_path,
+                cli_command=["fake-openclaw"],
+                runner=runner,
+                delivery_channel="feishu",
+                delivery_to="user:123",
+                delivery_account="main",
+            )
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["scheduler"]["mode"], "cli_synced")
         add_calls = [argv for argv in calls if argv[:3] == ["fake-openclaw", "cron", "add"]]
         self.assertEqual(len(add_calls), 2)
-        self.assertIn("--name", add_calls[0])
-        self.assertIn("--session", add_calls[0])
-        self.assertIn("--system-event", add_calls[0])
+        checker_add = next(argv for argv in add_calls if cron.CHECKER_ID in argv)
+        clear_add = next(argv for argv in add_calls if cron.CLEAR_ID in argv)
+        self.assertIn("--session", checker_add)
+        self.assertIn("isolated", checker_add)
+        self.assertIn("--message", checker_add)
+        self.assertIn("--announce", checker_add)
+        self.assertIn("--channel", checker_add)
+        self.assertIn("feishu", checker_add)
+        self.assertIn("--to", checker_add)
+        self.assertIn("user:123", checker_add)
+        self.assertIn("--account", checker_add)
+        self.assertIn("main", checker_add)
+        self.assertIn("--no-deliver", clear_add)
 
     def test_install_cron_warns_when_only_file_install_is_possible(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -218,6 +245,14 @@ class InstallCronTests(unittest.TestCase):
             self.assertEqual(result["scheduler"]["mode"], "file_only")
             self.assertTrue(result["scheduler"]["warnings"])
             self.assertTrue(jobs_path.exists())
+
+    def test_checker_job_can_store_explicit_delivery_target(self):
+        job = cron.checker_job(delivery_channel="feishu", delivery_to="user:abc", delivery_account="main")
+
+        self.assertEqual(job["delivery"]["mode"], "announce")
+        self.assertEqual(job["delivery"]["channel"], "feishu")
+        self.assertEqual(job["delivery"]["to"], "user:abc")
+        self.assertEqual(job["delivery"]["accountId"], "main")
 
 
 if __name__ == "__main__":

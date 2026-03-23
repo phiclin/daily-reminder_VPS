@@ -54,7 +54,25 @@ else:
     print(f"Updated {path}")
 PY
 
-python3 "${REPO_DIR}/scripts/install_cron.py" --jobs-path "${CRON_JSON}"
+cron_args=(--jobs-path "${CRON_JSON}")
+
+if [[ -n "${OPENCLAW_CLI:-}" ]]; then
+  cron_args+=(--openclaw-cli "${OPENCLAW_CLI}")
+fi
+
+if [[ -n "${DAILY_REMINDER_CHANNEL:-}" ]]; then
+  cron_args+=(--channel "${DAILY_REMINDER_CHANNEL}")
+fi
+
+if [[ -n "${DAILY_REMINDER_TO:-}" ]]; then
+  cron_args+=(--to "${DAILY_REMINDER_TO}")
+fi
+
+if [[ -n "${DAILY_REMINDER_ACCOUNT:-}" ]]; then
+  cron_args+=(--account "${DAILY_REMINDER_ACCOUNT}")
+fi
+
+python3 "${REPO_DIR}/scripts/install_cron.py" "${cron_args[@]}"
 python3 "${REPO_DIR}/scripts/daily_reminder_state.py" --state "${STATE_JSON}" ensure-state
 
 echo "Installation finished."
