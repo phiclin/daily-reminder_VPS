@@ -79,6 +79,17 @@
 
 ## 手工运维命令
 
+### 检查 scheduler 是否真的已加载任务
+
+如果本机有 `openclaw` CLI：
+
+```bash
+openclaw cron status --json
+openclaw cron list --all --json
+```
+
+如果 `jobs.json` 已经有内容，但 `cron status` 仍显示 `jobs: 0` 或 `list` 为空，说明当前 Gateway 还没把文件内容注册进内存调度器。
+
 ### 查看当前状态
 
 ```bash
@@ -117,6 +128,17 @@ python3 scripts/daily_reminder_state.py reschedule-task --task-id 2 --special-ti
 python3 scripts/daily_reminder_state.py build-reminder
 ```
 
+### 重新同步 cron 到 live scheduler
+
+```bash
+python3 scripts/install_cron.py
+```
+
+期望结果：
+
+- `scheduler.mode = "cli_synced"`：live scheduler 已加载
+- `scheduler.mode = "file_only"`：只更新了文件，运行中的 Gateway 可能还需要重启
+
 ### 手工清空当天状态
 
 ```bash
@@ -130,10 +152,13 @@ python3 scripts/daily_reminder_state.py clear-day
 检查顺序：
 
 1. 确认 `~/.openclaw/cron/jobs.json` 中两个 `_VPS` 任务存在且启用
-2. 确认状态文件中的 `status` 是 `running`
-3. 确认任务列表不是空数组
-4. 手工运行 `python3 scripts/daily_reminder_state.py build-reminder` 查看返回的 `kind`
-5. 如果脚本返回了消息但飞书没收到，说明问题在 OpenClaw 的消息发送链路，而不在本 skill
+2. 如果本机有 `openclaw` CLI，先确认 `openclaw cron list --all --json` 里真的存在这两个任务
+3. 确认状态文件中的 `status` 是 `running`
+4. 确认任务列表不是空数组
+5. 手工运行 `python3 scripts/daily_reminder_state.py build-reminder` 查看返回的 `kind`
+6. 如果脚本返回了消息但飞书没收到，说明问题在 OpenClaw 的消息发送链路，而不在本 skill
+
+如果第 1 步通过、第 2 步失败，就是典型的“文件在但 scheduler 没加载”问题。此时重新运行 `python3 scripts/install_cron.py`，或者直接重启 Gateway。
 
 ### 问题：所有任务完成后不再提醒
 

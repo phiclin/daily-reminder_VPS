@@ -85,8 +85,17 @@ bash install.sh
 
 - 把仓库链接到 `~/.newmax/skills/daily-reminder_VPS`
 - 在 `~/.openclaw/openclaw.json` 中启用该 skill
-- 安装或修复 `~/.openclaw/cron/jobs.json` 中的两个 `_VPS` cron 任务
+- 优先通过 `openclaw` CLI live sync 正在运行的 Gateway scheduler
+- 在无法 live sync 时，回写 `~/.openclaw/cron/jobs.json` 作为降级方案
 - 初始化 `~/.openclaw/workspace/.daily-reminder_VPS/state.json`
+
+推荐让 `openclaw` CLI 可以在 `PATH` 中直接使用；如果路径特殊，也可以在运行前设置：
+
+```bash
+export OPENCLAW_CLI="/custom/path/to/openclaw"
+```
+
+如果安装输出里出现 `scheduler.mode = "file_only"`，说明 cron 定义已经写入文件，但运行中的 Gateway 还没有热加载，需要重启 Gateway 或补上可用的 `openclaw` CLI 后重新执行安装。
 
 ### 3. 重启 OpenClaw
 
@@ -166,6 +175,13 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v
 
 ```bash
 python3 -m py_compile scripts/daily_reminder_state.py scripts/install_cron.py
+```
+
+如果本机安装了 `openclaw` CLI，还可以检查 live scheduler：
+
+```bash
+openclaw cron status --json
+openclaw cron list --all --json
 ```
 
 ## 文档

@@ -150,7 +150,7 @@ class InstallCronTests(unittest.TestCase):
                 + "\n"
             )
 
-            result = cron.install(jobs_path)
+            result = cron.install(jobs_path, allow_cli_sync=False)
 
             self.assertTrue(result["changed"])
             saved = json.loads(jobs_path.read_text())
@@ -159,6 +159,65 @@ class InstallCronTests(unittest.TestCase):
             checker = next(job for job in saved["jobs"] if job["id"] == cron.CHECKER_ID)
             self.assertEqual(checker["sessionTarget"], "main")
             self.assertEqual(checker["payload"]["kind"], "systemEvent")
+
+    def test_install_cron_syncs_live_scheduler_when_cli_is_available(self):
+        calls: list[list[str]] = []
+        list_responses = [
+            [],
+            [
+                {
+                    "jobId": "job-checker",
+                    "name": cron.CHECKER_ID,
+                    "schedule": {"kind": "cron", "expr": "* * * * *", "tz": "Asia/Shanghai"},
+                    "sessionTarget": "main",
+                    "wakeMode": "now",
+                    "payload": {"kind": "systemEvent", "text": "__DAILY_REMINDER_CHECK__"},
+                    "enabled": True,
+                },
+                {
+                    "jobId": "job-clear",
+                    "name": cron.CLEAR_ID,
+                    "schedule": {"kind": "cron", "expr": "0 0 * * *", "tz": "Asia/Shanghai"},
+                    "sessionTarget": "main",
+                    "wakeMode": "now",
+                    "payload": {"kind": "systemEvent", "text": "__DAILY_REMINDER_CLEAR__"},
+                    "enabled": True,
+                },
+            ],
+        ]
+
+        def runner(argv: list[str]) -> tuple[int, str, str]:
+            calls.append(argv)
+            if argv == ["fake-openclaw", "cron", "status", "--json"]:
+                return 0, json.dumps({"jobs": 0}), ""
+            if argv == ["fake-openclaw", "cron", "list", "--all", "--json"]:
+                return 0, json.dumps(list_responses.pop(0)), ""
+            if argv[:3] == ["fake-openclaw", "cron", "add"]:
+                return 0, json.dumps({"ok": True}), ""
+            self.fail(f"unexpected argv: {argv}")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            jobs_path = Path(tmpdir) / "jobs.json"
+            result = cron.install(jobs_path, cli_command=["fake-openclaw"], runner=runner)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["scheduler"]["mode"], "cli_synced")
+        add_calls = [argv for argv in calls if argv[:3] == ["fake-openclaw", "cron", "add"]]
+        self.assertEqual(len(add_calls), 2)
+        self.assertIn("--name", add_calls[0])
+        self.assertIn("--session", add_calls[0])
+        self.assertIn("--system-event", add_calls[0])
+
+    def test_install_cron_warns_when_only_file_install_is_possible(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            jobs_path = Path(tmpdir) / "jobs.json"
+
+            result = cron.install(jobs_path, cli_command=[], allow_cli_sync=True)
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["scheduler"]["mode"], "file_only")
+            self.assertTrue(result["scheduler"]["warnings"])
+            self.assertTrue(jobs_path.exists())
 
 
 if __name__ == "__main__":

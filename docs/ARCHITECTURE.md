@@ -44,10 +44,11 @@
 
 职责：
 
-- 将本 skill 需要的 cron 任务写入 OpenClaw 配置
+- 优先通过 `openclaw cron add/rm` 把任务注册进 live scheduler
+- 在没有可用 CLI 时，把本 skill 需要的 cron 任务写入 OpenClaw 配置文件
 - 清理旧的非 `_VPS` job id
-- 保留无关 cron 任务
-- 在配置发生变更时生成备份
+- 在文件模式下保留无关 cron 任务
+- 在文件模式发生变更时生成备份
 
 ### 4. OpenClaw Cron
 
@@ -89,6 +90,13 @@
 2. OpenClaw 调用 `clear-day`
 3. 脚本清空当天状态
 4. 不发送额外结束消息
+
+### 安装与注册流
+
+1. `install.sh` 调用 `scripts/install_cron.py`
+2. 如果本机存在可用的 `openclaw` CLI，则通过 Gateway RPC 把任务注册到 live scheduler
+3. 如果没有 CLI，则退回到写 `~/.openclaw/cron/jobs.json`
+4. 在 live sync 失败时，脚本会显式返回失败，而不是假装安装成功
 
 ## 状态模型
 
@@ -156,3 +164,4 @@
 - 本仓库不直接处理飞书渠道配置，依赖 OpenClaw 现有消息发送能力
 - 任务文本的自然语言拆分与时间识别由 OpenClaw 侧完成，不在 Python 脚本里做 NLP
 - 当前版本只支持“完成”和“改时间”，不支持直接“改任务内容”
+- 如果本机没有可用的 `openclaw` CLI，安装器只能做文件级降级写入；在 Gateway 已经运行的情况下，仍然需要人工重启才能让 scheduler 重新加载
