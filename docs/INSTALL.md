@@ -2,6 +2,8 @@
 
 本文档说明如何把 `daily-reminder_VPS` 安装为本地 OpenClaw skill。
 
+如果你已经安装完成，想看目标机上线核对项，请继续看 `docs/DEPLOYMENT.md`。
+
 ## 前置条件
 
 - 已安装 OpenClaw

@@ -22,6 +22,10 @@
 - `tests/test_daily_reminder_state.py`：单元测试
 - `references/cron-json-shape.md`：当前 cron JSON 结构参考
 - `docs/INSTALL.md`：安装说明
+- `docs/INDEX.md`：文档导航
+- `docs/COMMANDS.md`：命令与交互参考
+- `docs/DEPLOYMENT.md`：部署与上线核对清单
+- `docs/INCIDENT-2026-03-23.md`：本次修订的故障与修复记录
 - `docs/OPERATIONS.md`：运行与排障说明
 - `docs/ARCHITECTURE.md`：架构设计说明
 - `config-examples/`：配置示例
@@ -195,7 +199,11 @@ openclaw cron list --all --json
 
 ## 文档
 
+- 文档导航：`docs/INDEX.md`
 - 安装说明：`docs/INSTALL.md`
+- 命令参考：`docs/COMMANDS.md`
+- 部署清单：`docs/DEPLOYMENT.md`
+- 修订记录：`docs/INCIDENT-2026-03-23.md`
 - 运维说明：`docs/OPERATIONS.md`
 - 架构说明：`docs/ARCHITECTURE.md`
 

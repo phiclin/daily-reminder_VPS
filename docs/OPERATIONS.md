@@ -2,6 +2,8 @@
 
 本文档面向日常运行和排障。
 
+如果你是首次部署而不是排障，建议先看 `docs/DEPLOYMENT.md`。
+
 ## 运行时文件
 
 - Skill 根目录：`~/.newmax/skills/daily-reminder_VPS`

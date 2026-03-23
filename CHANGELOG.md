@@ -13,6 +13,10 @@ All notable changes to `daily-reminder_VPS` will be documented in this file.
 - Added a complete repository documentation pack:
   - `README.md`
   - `docs/INSTALL.md`
+  - `docs/INDEX.md`
+  - `docs/COMMANDS.md`
+  - `docs/DEPLOYMENT.md`
+  - `docs/INCIDENT-2026-03-23.md`
   - `docs/OPERATIONS.md`
   - `docs/ARCHITECTURE.md`
   - `config-examples/*`
