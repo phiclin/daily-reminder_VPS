@@ -8,6 +8,7 @@
 
 - Skill 根目录：`~/.newmax/skills/daily-reminder_VPS`
 - 状态文件：`~/.openclaw/workspace/.daily-reminder_VPS/state.json`
+- 归档目录：`~/.openclaw/workspace/.daily-reminder_VPS/archive/`
 - OpenClaw 配置：`~/.openclaw/openclaw.json`
 - Cron 配置：`~/.openclaw/cron/jobs.json`
 
@@ -53,6 +54,26 @@
 ```
 
 如果时间已经过去，脚本会返回 `past_time`，这时应由 OpenClaw 追问你新的今天稍后时间。
+
+### 查看历史归档
+
+```text
+每日提醒 归档 2026-03-26
+```
+
+会返回该日完整归档清单和完成情况。
+
+### 查看周期汇总
+
+```text
+每日提醒 汇总 本周
+每日提醒 汇总 本月
+每日提醒 汇总 最近7天
+每日提醒 汇总 最近30天
+每日提醒 汇总 从 2026-03-01 到 2026-03-31
+```
+
+会返回整体统计和逐日简表。
 
 ## 状态文件说明
 
@@ -114,6 +135,19 @@ python3 scripts/daily_reminder_state.py status
 
 ```bash
 python3 scripts/daily_reminder_state.py ensure-state
+```
+
+### 查看单日归档
+
+```bash
+python3 scripts/daily_reminder_state.py show-archive --date 2026-03-26
+```
+
+### 查看周期汇总
+
+```bash
+python3 scripts/daily_reminder_state.py summary --preset this-week
+python3 scripts/daily_reminder_state.py summary --from 2026-03-01 --to 2026-03-31
 ```
 
 ### 模拟新增任务
@@ -199,6 +233,27 @@ python3 scripts/daily_reminder_state.py clear-day --now 2026-03-24T00:00:00+08:0
 ```
 
 然后确认 `daily-reminder-midnight-clear_VPS` cron 任务存在。
+
+### 问题：归档文件没有生成
+
+检查顺序：
+
+1. 确认当天确实录入过任务
+2. 确认当天是否已经执行过 `停止`、`clear-day` 或跨天 rollover
+3. 查看 `~/.openclaw/workspace/.daily-reminder_VPS/archive/YYYY/MM/` 是否存在对应日期文件
+4. 手工运行 `python3 scripts/daily_reminder_state.py show-archive --date YYYY-MM-DD`
+
+如果当天没有任务，脚本不会生成空归档文件，这是设计行为。
+
+### 问题：汇总结果为空
+
+先确认查询范围内是否真的有归档文件：
+
+```bash
+find ~/.openclaw/workspace/.daily-reminder_VPS/archive -name '*.json' | sort
+```
+
+如果归档存在但汇总为空，优先检查输入日期范围是否正确。
 
 ### 问题：午夜收到了“静默”之类无意义消息
 

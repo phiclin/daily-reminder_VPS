@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import tempfile
@@ -124,6 +125,151 @@ class DailyReminderStateTests(unittest.TestCase):
         self.assertEqual(cleared["date"], "2026-03-24")
         self.assertEqual(cleared["tasks"], [])
         self.assertEqual(cleared["status"], dr.STATUS_STOPPED)
+
+    def test_clear_day_archives_previous_day_before_reset(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "state.json"
+            archive_root = Path(tmpdir) / "archive"
+            state = dr.empty_state("2026-03-25")
+            start = dr.parse_iso("2026-03-25T09:00:00+08:00")
+            state = dr.add_tasks(state, start, [{"text": "写日报", "special_time": "15:30"}], "start")
+            dr.save_state(state_path, state)
+
+            result = dr.command_clear_day(
+                argparse.Namespace(
+                    state=str(state_path),
+                    archive_root=str(archive_root),
+                    now="2026-03-26T00:00:00+08:00",
+                )
+            )
+
+            archived = json.loads((archive_root / "2026" / "03" / "2026-03-25.json").read_text())
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["state"]["date"], "2026-03-26")
+            self.assertEqual(archived["archive_reason"], "midnight_clear")
+            self.assertEqual(archived["total_tasks"], 1)
+            self.assertEqual(archived["tasks"][0]["text"], "写日报")
+
+    def test_stop_day_archives_same_day_before_reset(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "state.json"
+            archive_root = Path(tmpdir) / "archive"
+            state = dr.empty_state("2026-03-26")
+            start = dr.parse_iso("2026-03-26T09:00:00+08:00")
+            state = dr.add_tasks(state, start, [{"text": "整理方案", "special_time": None}], "start")
+            dr.save_state(state_path, state)
+
+            result = dr.command_stop_day(
+                argparse.Namespace(
+                    state=str(state_path),
+                    archive_root=str(archive_root),
+                    now="2026-03-26T18:00:00+08:00",
+                )
+            )
+
+            archived = json.loads((archive_root / "2026" / "03" / "2026-03-26.json").read_text())
+            self.assertTrue(result["ok"])
+            self.assertEqual(archived["archive_reason"], "manual_stop")
+            self.assertEqual(archived["tasks"][0]["id"], 1)
+            self.assertEqual(result["state"]["tasks"], [])
+
+    def test_ensure_state_rollover_archives_stale_day(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "state.json"
+            archive_root = Path(tmpdir) / "archive"
+            state = dr.empty_state("2026-03-25")
+            start = dr.parse_iso("2026-03-25T21:00:00+08:00")
+            state = dr.add_tasks(state, start, [{"text": "收尾工作", "special_time": None}], "start")
+            dr.save_state(state_path, state)
+
+            result = dr.command_ensure_state(
+                argparse.Namespace(
+                    state=str(state_path),
+                    archive_root=str(archive_root),
+                    now="2026-03-26T08:00:00+08:00",
+                )
+            )
+
+            archived = json.loads((archive_root / "2026" / "03" / "2026-03-25.json").read_text())
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["state"]["date"], "2026-03-26")
+            self.assertEqual(archived["archive_reason"], "rollover")
+            self.assertEqual(archived["pending_tasks"], 1)
+
+    def test_show_archive_renders_saved_day(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            archive_root = Path(tmpdir) / "archive"
+            (archive_root / "2026" / "03").mkdir(parents=True)
+            record = {
+                "date": "2026-03-26",
+                "timezone": "Asia/Shanghai",
+                "archived_at": "2026-03-27T00:00:00+08:00",
+                "archive_reason": "midnight_clear",
+                "status_before_archive": "paused_all_done",
+                "total_tasks": 2,
+                "completed_tasks": 1,
+                "pending_tasks": 1,
+                "completion_rate": 50.0,
+                "tasks": [
+                    {"id": 1, "text": "写日报", "done": True, "special_time": None, "created_at": "x", "updated_at": "x"},
+                    {"id": 2, "text": "跟进客户", "done": False, "special_time": "15:30", "created_at": "x", "updated_at": "x"},
+                ],
+            }
+            (archive_root / "2026" / "03" / "2026-03-26.json").write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n")
+
+            result = dr.command_show_archive(
+                argparse.Namespace(
+                    archive_root=str(archive_root),
+                    date="2026-03-26",
+                    now="2026-03-27T09:00:00+08:00",
+                )
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertIn("【每日提醒｜归档查看】", result["message"])
+            self.assertIn("归档原因：零点清空", result["message"])
+            self.assertIn("~~1. 写日报~~", result["message"])
+            self.assertIn("2. 跟进客户 @15:30", result["message"])
+
+    def test_summary_aggregates_multiple_archived_days(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            archive_root = Path(tmpdir) / "archive"
+            (archive_root / "2026" / "03").mkdir(parents=True)
+            for date, total, completed, reason in (
+                ("2026-03-24", 3, 2, "midnight_clear"),
+                ("2026-03-25", 2, 2, "manual_stop"),
+            ):
+                record = {
+                    "date": date,
+                    "timezone": "Asia/Shanghai",
+                    "archived_at": f"{date}T23:59:00+08:00",
+                    "archive_reason": reason,
+                    "status_before_archive": "running",
+                    "total_tasks": total,
+                    "completed_tasks": completed,
+                    "pending_tasks": total - completed,
+                    "completion_rate": round((completed / total) * 100, 2),
+                    "tasks": [],
+                }
+                (archive_root / "2026" / "03" / f"{date}.json").write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n")
+
+            result = dr.command_summary(
+                argparse.Namespace(
+                    archive_root=str(archive_root),
+                    preset=None,
+                    from_date="2026-03-24",
+                    to_date="2026-03-25",
+                    now="2026-03-26T09:00:00+08:00",
+                )
+            )
+
+            self.assertTrue(result["ok"])
+            self.assertIn("【每日提醒｜汇总查看】", result["message"])
+            self.assertIn("归档天数：2", result["message"])
+            self.assertIn("总任务数：5", result["message"])
+            self.assertIn("已完成：4", result["message"])
+            self.assertIn("2026-03-24", result["message"])
+            self.assertIn("2026-03-25", result["message"])
 
 
 class InstallCronTests(unittest.TestCase):

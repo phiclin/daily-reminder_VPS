@@ -2,6 +2,20 @@
 
 All notable changes to `daily-reminder_VPS` will be documented in this file.
 
+## 2026-03-26
+
+### Added
+
+- Added local per-day archive storage under `~/.openclaw/workspace/.daily-reminder_VPS/archive/YYYY/MM/YYYY-MM-DD.json`.
+- Added archive query support for `每日提醒 归档 YYYY-MM-DD`.
+- Added summary query support for weekly, monthly, recent-day, and custom date-range reports.
+- Added design and implementation docs for the archive-and-summary feature.
+
+### Changed
+
+- Changed `clear-day`, `stop-day`, and cross-day rollover to archive the previous day before resetting runtime state.
+- Extended documentation and skill instructions to cover archive storage and historical reporting.
+
 ## 2026-03-23
 
 ### Added

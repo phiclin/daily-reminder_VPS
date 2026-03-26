@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 TZ_NAME = "Asia/Shanghai"
 TZ = ZoneInfo(TZ_NAME)
 DEFAULT_STATE_PATH = Path("~/.openclaw/workspace/.daily-reminder_VPS/state.json").expanduser()
+DEFAULT_ARCHIVE_ROOT = DEFAULT_STATE_PATH.parent / "archive"
 STATUS_RUNNING = "running"
 STATUS_PAUSED_ALL_DONE = "paused_all_done"
 STATUS_STOPPED = "stopped"
@@ -57,6 +58,10 @@ def normalize_time(value: str) -> str:
         except ValueError:
             continue
     raise ValueError(f"invalid time format: {value}")
+
+
+def parse_date(value: str) -> date:
+    return date.fromisoformat(value.strip())
 
 
 def ensure_parent(path: Path) -> None:
@@ -111,6 +116,127 @@ def normalize_state(state: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def archive_root_for_state(state_path: Path, archive_root: str | None = None) -> Path:
+    if archive_root:
+        return Path(archive_root).expanduser()
+    return state_path.expanduser().parent / "archive"
+
+
+def archive_path(root: Path, archive_date: str) -> Path:
+    parsed = parse_date(archive_date)
+    return root / f"{parsed.year:04d}" / f"{parsed.month:02d}" / f"{archive_date}.json"
+
+
+def archive_reason_label(reason: str) -> str:
+    return {
+        "manual_stop": "手动停止",
+        "midnight_clear": "零点清空",
+        "rollover": "跨天切换",
+    }.get(reason, reason)
+
+
+def should_archive(state: dict[str, Any]) -> bool:
+    return bool(state.get("tasks"))
+
+
+def build_archive_record(state: dict[str, Any], now: datetime, reason: str) -> dict[str, Any]:
+    total = len(state["tasks"])
+    completed = sum(1 for task in state["tasks"] if task["done"])
+    pending = total - completed
+    completion_rate = round((completed / total) * 100, 2) if total else 0.0
+    return {
+        "date": state["date"],
+        "timezone": state.get("timezone", TZ_NAME),
+        "archived_at": now.isoformat(timespec="seconds"),
+        "archive_reason": reason,
+        "status_before_archive": state.get("status", STATUS_STOPPED),
+        "total_tasks": total,
+        "completed_tasks": completed,
+        "pending_tasks": pending,
+        "completion_rate": completion_rate,
+        "tasks": [
+            {
+                "id": task["id"],
+                "text": task["text"],
+                "done": task["done"],
+                "special_time": task.get("special_time"),
+                "created_at": task.get("created_at"),
+                "updated_at": task.get("updated_at"),
+            }
+            for task in state["tasks"]
+        ],
+    }
+
+
+def save_archive_record(root: Path, record: dict[str, Any]) -> Path:
+    path = archive_path(root, record["date"])
+    ensure_parent(path)
+    path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n")
+    return path
+
+
+def archive_state_if_needed(state: dict[str, Any], root: Path, now: datetime, reason: str) -> dict[str, Any] | None:
+    if not should_archive(state):
+        return None
+    record = build_archive_record(state, now, reason)
+    save_archive_record(root, record)
+    return record
+
+
+def archive_and_rollover_if_stale(state: dict[str, Any], root: Path, now: datetime) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    today = now.date().isoformat()
+    if state["date"] == today:
+        return state, None
+    record = archive_state_if_needed(state, root, now, "rollover")
+    rolled = empty_state(today)
+    rolled["updated_at"] = now.isoformat(timespec="seconds")
+    return rolled, record
+
+
+def load_archive_record(root: Path, archive_date: str) -> dict[str, Any] | None:
+    path = archive_path(root, archive_date)
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())
+
+
+def daterange(start: date, end: date) -> list[date]:
+    if end < start:
+        raise ValueError("end date cannot be before start date")
+    days: list[date] = []
+    cursor = start
+    while cursor <= end:
+        days.append(cursor)
+        cursor += timedelta(days=1)
+    return days
+
+
+def archives_between(root: Path, start: date, end: date) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for current in daterange(start, end):
+        record = load_archive_record(root, current.isoformat())
+        if record:
+            records.append(record)
+    return records
+
+
+def summary_range_for_preset(preset: str, now: datetime) -> tuple[date, date, str]:
+    today = now.date()
+    if preset == "this-week":
+        start = today - timedelta(days=today.weekday())
+        return start, today, "本周"
+    if preset == "this-month":
+        start = today.replace(day=1)
+        return start, today, "本月"
+    if preset == "last-7-days":
+        start = today - timedelta(days=6)
+        return start, today, "最近7天"
+    if preset == "last-30-days":
+        start = today - timedelta(days=29)
+        return start, today, "最近30天"
+    raise ValueError(f"unsupported preset: {preset}")
+
+
 def local_now(override: str | None) -> datetime:
     return parse_iso(override) if override else datetime.now(TZ)
 
@@ -139,6 +265,58 @@ def task_line(task: dict[str, Any]) -> str:
     if task["done"]:
         return f"~~{line}~~"
     return line
+
+
+def render_archive_message(record: dict[str, Any]) -> str:
+    lines = [
+        "【每日提醒｜归档查看】",
+        f"日期：{record['date']}",
+        f"归档原因：{archive_reason_label(record['archive_reason'])}",
+        (
+            f"当天共 {record['total_tasks']} 条，已完成 {record['completed_tasks']} 条，"
+            f"未完成 {record['pending_tasks']} 条，完成率 {record['completion_rate']:.2f}%"
+        ),
+        "",
+    ]
+    if record["tasks"]:
+        lines.extend(task_line(task) for task in record["tasks"])
+    else:
+        lines.append("当天没有任务。")
+    return "\n".join(lines).strip()
+
+
+def render_summary_message(records: list[dict[str, Any]], label: str, start: date, end: date) -> str:
+    if not records:
+        return (
+            "【每日提醒｜汇总查看】\n"
+            f"范围：{label}（{start.isoformat()} 到 {end.isoformat()}）\n"
+            "该时间范围内暂无归档记录。"
+        )
+
+    total_tasks = sum(record["total_tasks"] for record in records)
+    completed_tasks = sum(record["completed_tasks"] for record in records)
+    pending_tasks = sum(record["pending_tasks"] for record in records)
+    completion_rate = round((completed_tasks / total_tasks) * 100, 2) if total_tasks else 0.0
+    lines = [
+        "【每日提醒｜汇总查看】",
+        f"范围：{label}（{start.isoformat()} 到 {end.isoformat()}）",
+        f"归档天数：{len(records)}",
+        f"总任务数：{total_tasks}",
+        f"已完成：{completed_tasks}",
+        f"未完成：{pending_tasks}",
+        f"整体完成率：{completion_rate:.2f}%",
+        "",
+        "逐日情况：",
+    ]
+    for record in records:
+        lines.append(
+            (
+                f"{record['date']} | {record['total_tasks']} 条 | 完成 {record['completed_tasks']} | "
+                f"未完成 {record['pending_tasks']} | {record['completion_rate']:.2f}% | "
+                f"{archive_reason_label(record['archive_reason'])}"
+            )
+        )
+    return "\n".join(lines)
 
 
 def render_message(state: dict[str, Any], title: str, now: datetime, reason_detail: str | None = None) -> str:
@@ -366,19 +544,27 @@ def status_payload(state: dict[str, Any], now: datetime) -> dict[str, Any]:
     return {"ok": True, "kind": "status", "message": render_message(state, "状态查看", now), "state": state}
 
 
+def prepare_state(path: Path, archive_root: Path, now: datetime) -> dict[str, Any]:
+    state = load_state(path)
+    state, _ = archive_and_rollover_if_stale(state, archive_root, now)
+    return state
+
+
 def command_ensure_state(args: argparse.Namespace) -> dict[str, Any]:
     now = local_now(args.now)
-    state = load_state(Path(args.state))
-    state, _ = ensure_today(state, now)
+    path = Path(args.state)
+    archive_root = archive_root_for_state(path, getattr(args, "archive_root", None))
+    state = prepare_state(path, archive_root, now)
     state["updated_at"] = now.isoformat(timespec="seconds")
-    save_state(Path(args.state), state)
+    save_state(path, state)
     return {"ok": True, "state": state}
 
 
 def command_add_tasks(args: argparse.Namespace) -> dict[str, Any]:
     now = local_now(args.now)
     path = Path(args.state)
-    state = load_state(path)
+    archive_root = archive_root_for_state(path, getattr(args, "archive_root", None))
+    state = prepare_state(path, archive_root, now)
     state = add_tasks(state, now, parse_task_list(args.tasks_json), args.command)
     save_state(path, state)
     payload = status_payload(state, now)
@@ -389,7 +575,8 @@ def command_add_tasks(args: argparse.Namespace) -> dict[str, Any]:
 def command_complete_task(args: argparse.Namespace) -> dict[str, Any]:
     now = local_now(args.now)
     path = Path(args.state)
-    state = load_state(path)
+    archive_root = archive_root_for_state(path, getattr(args, "archive_root", None))
+    state = prepare_state(path, archive_root, now)
     result = complete_task(state, now, args.task_id)
     save_state(path, result["state"])
     if result["all_done"]:
@@ -400,7 +587,8 @@ def command_complete_task(args: argparse.Namespace) -> dict[str, Any]:
 def command_reschedule_task(args: argparse.Namespace) -> dict[str, Any]:
     now = local_now(args.now)
     path = Path(args.state)
-    state = load_state(path)
+    archive_root = archive_root_for_state(path, getattr(args, "archive_root", None))
+    state = prepare_state(path, archive_root, now)
     result = reschedule_task(state, now, args.task_id, args.special_time)
     if result["ok"]:
         save_state(path, result["state"])
@@ -410,7 +598,10 @@ def command_reschedule_task(args: argparse.Namespace) -> dict[str, Any]:
 def command_stop_day(args: argparse.Namespace) -> dict[str, Any]:
     now = local_now(args.now)
     path = Path(args.state)
-    state = stop_day(load_state(path), now)
+    archive_root = archive_root_for_state(path, getattr(args, "archive_root", None))
+    state_before = load_state(path)
+    archive_state_if_needed(state_before, archive_root, now, "manual_stop")
+    state = stop_day(state_before, now)
     save_state(path, state)
     return {"ok": True, "state": state, "message": "已停止今天的每日提醒并清空任务。"}
 
@@ -418,7 +609,10 @@ def command_stop_day(args: argparse.Namespace) -> dict[str, Any]:
 def command_clear_day(args: argparse.Namespace) -> dict[str, Any]:
     now = local_now(args.now)
     path = Path(args.state)
-    state = clear_day(load_state(path), now)
+    archive_root = archive_root_for_state(path, getattr(args, "archive_root", None))
+    state_before = load_state(path)
+    archive_state_if_needed(state_before, archive_root, now, "midnight_clear")
+    state = clear_day(state_before, now)
     save_state(path, state)
     return {"ok": True, "state": state, "message": ""}
 
@@ -426,7 +620,8 @@ def command_clear_day(args: argparse.Namespace) -> dict[str, Any]:
 def command_build_reminder(args: argparse.Namespace) -> dict[str, Any]:
     now = local_now(args.now)
     path = Path(args.state)
-    state = load_state(path)
+    archive_root = archive_root_for_state(path, getattr(args, "archive_root", None))
+    state = prepare_state(path, archive_root, now)
     result = build_reminder(state, now)
     save_state(path, result["state"])
     return result
@@ -435,13 +630,58 @@ def command_build_reminder(args: argparse.Namespace) -> dict[str, Any]:
 def command_status(args: argparse.Namespace) -> dict[str, Any]:
     now = local_now(args.now)
     path = Path(args.state)
-    state = load_state(path)
+    archive_root = archive_root_for_state(path, getattr(args, "archive_root", None))
+    state = prepare_state(path, archive_root, now)
     return status_payload(state, now)
+
+
+def command_show_archive(args: argparse.Namespace) -> dict[str, Any]:
+    root = Path(args.archive_root).expanduser()
+    try:
+        archive_date = parse_date(args.date).isoformat()
+    except ValueError:
+        return {"ok": False, "error": "invalid_date", "message": f"无效日期：{args.date}"}
+    record = load_archive_record(root, archive_date)
+    if not record:
+        return {
+            "ok": False,
+            "error": "archive_not_found",
+            "message": f"找不到 {args.date} 的归档记录。",
+        }
+    return {"ok": True, "kind": "archive", "message": render_archive_message(record), "record": record}
+
+
+def command_summary(args: argparse.Namespace) -> dict[str, Any]:
+    now = local_now(args.now)
+    root = Path(args.archive_root).expanduser()
+    try:
+        if args.preset:
+            start, end, label = summary_range_for_preset(args.preset, now)
+        else:
+            if not args.from_date or not args.to_date:
+                return {
+                    "ok": False,
+                    "error": "missing_range",
+                    "message": "请提供汇总周期，或同时提供 --from 和 --to 日期。",
+                }
+            start = parse_date(args.from_date)
+            end = parse_date(args.to_date)
+            label = "自定义范围"
+    except ValueError as exc:
+        return {"ok": False, "error": "invalid_range", "message": str(exc)}
+    records = archives_between(root, start, end)
+    return {
+        "ok": True,
+        "kind": "summary",
+        "message": render_summary_message(records, label, start, end),
+        "records": records,
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--state", default=str(DEFAULT_STATE_PATH))
+    parser.add_argument("--archive-root", default=str(DEFAULT_ARCHIVE_ROOT))
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
     ensure_parser = subparsers.add_parser("ensure-state")
@@ -480,6 +720,17 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser = subparsers.add_parser("status")
     status_parser.add_argument("--now")
     status_parser.set_defaults(func=command_status)
+
+    show_archive_parser = subparsers.add_parser("show-archive")
+    show_archive_parser.add_argument("--date", required=True)
+    show_archive_parser.set_defaults(func=command_show_archive)
+
+    summary_parser = subparsers.add_parser("summary")
+    summary_parser.add_argument("--now")
+    summary_parser.add_argument("--preset", choices=["this-week", "this-month", "last-7-days", "last-30-days"])
+    summary_parser.add_argument("--from", dest="from_date")
+    summary_parser.add_argument("--to", dest="to_date")
+    summary_parser.set_defaults(func=command_summary)
 
     return parser
 

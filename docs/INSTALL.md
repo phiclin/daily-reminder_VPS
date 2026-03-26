@@ -33,6 +33,8 @@ bash install.sh
 - 在没有可用 CLI 时，回写 `jobs.json` 作为降级方案
 - 初始化 `~/.openclaw/workspace/.daily-reminder_VPS/state.json`
 
+历史归档目录 `~/.openclaw/workspace/.daily-reminder_VPS/archive/` 不需要单独初始化，会在首次归档时自动创建。
+
 安装完成后，重启 OpenClaw 即可。
 
 如果你的 `openclaw` CLI 路径不在 `PATH` 中，可以这样执行：

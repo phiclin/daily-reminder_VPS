@@ -33,6 +33,10 @@
 
 - `docs/ARCHITECTURE.md`
   - 组件划分、数据流、设计取舍、已知限制。
+- `docs/specs/2026-03-26-archive-and-summary.md`
+  - 本次归档与汇总功能的设计说明。
+- `docs/plans/2026-03-26-archive-and-summary.md`
+  - 本次归档与汇总功能的实现计划。
 - `references/cron-json-shape.md`
   - 当前 cron JSON 结构参考。
 - `CHANGELOG.md`
@@ -47,6 +51,7 @@
 
 - 想知道怎么装：看 `docs/INSTALL.md`
 - 想知道怎么用：看 `docs/COMMANDS.md`
+- 想知道归档和汇总怎么设计的：看 `docs/specs/2026-03-26-archive-and-summary.md`
 - 想知道目标机怎么验收：看 `docs/DEPLOYMENT.md`
 - 想知道提醒为什么没发出来：看 `docs/OPERATIONS.md`
 - 想知道为什么这次会改 cron 架构：看 `docs/INCIDENT-2026-03-23.md`
